@@ -1,0 +1,275 @@
+---
+title: "An Introduction to Functional Analysis"
+author: "Alex Sanchez and Ferran Brianso"
+date: "April 25th 2018"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  pdf_document:
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, cache=FALSE, 
+                      echo=TRUE, warning=FALSE, message=FALSE, results ='markup')
+options(warn=-1, width=100)
+```
+
+```{r installation}
+installifnot <- function (packageName){
+ if (!(require(packageName, character.only=TRUE))) {
+    install.packages(packageName)
+  }else{
+    detach(paste ("package", packageName, sep=":"), character.only=TRUE)
+  } 
+}
+bioCifnot <- function (packageName){
+ if (!(require(packageName, character.only=TRUE))) {
+    source("http://bioconductor.org/biocLite.R")
+    biocLite(packageName)
+ }else{
+  detach(paste ("package", packageName, sep=":"), character.only=TRUE)
+  }  
+}
+installifnot("knitr")
+bioCifnot ("annotate")
+bioCifnot ("org.Hs.eg.db")
+bioCifnot ("hgu133a.db")
+bioCifnot ("GO.db")
+bioCifnot ("GOstats")
+```
+
+
+# Introduction
+
+This document provides *some examples* on the analyses that can be perfomed on one or more gene lists to help gain biological insight on the results of a differential expression analysis. Overall these analyses are known as _Functional Analysis_.
+
+Functional analysis can be performed in many different ways that lead to similar (or not-so-similar) results.  Because there is not a universal acceptance of what is a *complete, well done functional analysis* some different approaches will be shown.
+
+## Input Data for Functional Analysis
+
+Functional analysis can be made, on a first approach on
+
+- A list of genes selected by being differentially expressed in a given experimental setting.
+- The whole list of genes -or even the whole expression matrix- that has been used in the analysis.
+
+Most tools require that gene list consist of gene identifiers in some standard notation such as `Entrez`, `ENSEMBL` or other related to these.
+
+These gene lists can be usually extracted from output tables provided by microarrays or RNA-seq data analysis tools.
+
+The analysis below is applied on a set of three gene lists obtained from a cancer study, but it can be easily extended to more lists or other studies.
+
+## Read data
+
+We start by reading two files that contain the expression values (`expres_AvsB.csv`) and the results (`Top_AvsB.csv`) of a differential expression analysis erformed using microarrays.
+
+The code and text for the analysis that, using these data, generated these tables, can be found at: [https://github.com/alexsanchezpla/Ejemplo_de_MDA_con_Bioconductor](https://github.com/alexsanchezpla/Ejemplo_de_MDA_con_Bioconductor)
+
+The code below assumes the files have been stored in a subdirectory of the current folder named `datasets`. Alternatively they can be read-onthe-fly
+
+```{r readData1}
+topTabAvsB <- read.csv2("datasets/Top_AvsB.csv2", row.names=1)
+expresAvsB <- read.csv2 ("datasets/expres_AvsB.csv2", row.names=1)
+
+dim(topTabAvsB); head(topTabAvsB)
+dim(expresAvsB); head(expresAvsB)
+```
+
+# Exploring gene lists
+
+
+A gene list contains useful information that can be extracted by querying databases.
+
+Let us see how we can obtain information fom the _genes_ probes in table (comparison) `AvsB`. 
+
+```{r probes}
+myProbes <- rownames(expresAvsB)
+head(myProbes)
+```
+
+
+We need to load the library ("package") that contains specific annotations for the microarray model that was used in this study.
+It has to be noticed also that each row does not represent a gene, but a probe, a sequence that has been designed to detect if a gene is expressed. microarrays contain multiple probes for many genes and this is something that ha to be dealt with.
+ 
+## ID conversion
+
+In order to do most analyses it is convenient to use a universally accepted identifier such as Entrez or ENSEMBL.
+For instance Bioconductor organism annotation packages rely on Entrez identifiers as main key for most mappings.
+
+It is possible to find out easily which mappings are available for each ID
+
+```{r mappings}
+require(hgu133a.db)
+keytypes(hgu133a.db)
+```
+
+Annotation packages make it possible to annotate genes and in a similar manner other omics features. For example we can obtain gene symbol, entrez ID and gene name with a single SQL instruction.
+```{r}
+geneAnots <- select(hgu133a.db, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+head(geneAnots)
+```
+
+## Differentially expressed genes
+
+We are often interested in "differentially expressed genes", that is those genes that can be considered to  express differently between two conditions. It is straightforward to select those genes from a results "topTable" by taking those whose p-value is below a given threshold. Eventually we may require that there is besides a minimum effect size.
+
+```{r}
+selected<- topTabAvsB[,"adj.P.Val"]<0.01 & abs(topTabAvsB[,"logFC"]) > 1
+sum(selected)
+selectedTopTab <- topTabAvsB[selected,]
+head(selectedTopTab)
+```
+
+It is straightforward to annotate these genes adding Entrez, Gene Symbol or Gene Description to the table.?
+
+```{r}
+selectedProbes <- rownames(selectedTopTab)
+selectedAnots <-  select(hgu133a.db, selectedProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+head(selectedAnots)
+selectedTopTab2 <- cbind(PROBEID=rownames(selectedTopTab),  selectedTopTab)
+selectedInfo <- merge (x= selectedAnots, y = selectedTopTab2,
+                       by.x="PROBEID", by.y="PROBEID")
+head(selectedInfo)
+write.csv2(selectedInfo, file="selectedTopTab_AvsB.csv2")
+```
+
+
+# From gene lists to pathway analysis
+
+See [http://ithake.eu/2012/09/on-the-exploration-of-a-list-of-genes/](This post) for a simple, external, motivation on why we may want to move from gene-by-gene analysis to gene-set analyses.
+
+
+## Basic GO Annotation
+
+<!-- ALTRES OPCIONS
+Es poden trobar informacions de com consultar la GO a altres llocs:
+Per exemple
+- El meu vell document OntologyAnalysis.Rnw
+- Al workflow d'anotacio de Bioconductor: http://bioconductor.org/help/workflows/annotation/annotation/#OrgDb
+- https://www.biostars.org/p/81174/ i els enllassos derivats
+
+-->
+
+Bioconductor libraries allow for both: 
+- Exploration of functional information on genes based on the Gene Ontology
+- Different types of Gene Enrichment and Pathway Analysis based on the GO or other pathway databases such as the KEGG, Reactome etc.
+
+The code below shows some easy ways to retrieve GO information associated with genes
+
+Start by loading the appropriate packages
+
+Select the "top 5" genes from the list
+
+```{r top25}
+probes <- rownames(topTabAvsB)[1:5]
+genes <-selectedAnots[1:5,"ENTREZID"]
+```
+
+Select the GO Terms associated with thes IDs
+
+```{r}
+keytypes(hgu133a.db)
+columns(hgu133a.db)
+info1<- select(hgu133a.db, keys=probes[1], 
+                  columns = c("ENTREZID", "SYMBOL","GO"),
+                  keytype="PROBEID")
+dim(info1)
+head(info1, n=20)
+```
+
+Note that we have queried the "GO" table which relates each gene with the most specific GO annotations. We might have used the "GOALL" table which contains not only the specific annotations but also all thier ancestors.
+
+```{r}
+info1all<- select(hgu133a.db, keys=probes[1], 
+                  columns = c("ENTREZID", "SYMBOL","GOALL"),
+                  keytype="PROBEID")
+head(info1all, n=20)
+dim(info1all)
+```
+
+Previous queries return the GO identifiers associated with probe identifiers of a given microarray. One can proceed similarly if instead of probes one has ENTREZ identifiers. In this case the "natural" database to query is an organism annotation package.
+
+```{r}
+keytypes(org.Hs.eg.db)
+columns(org.Hs.eg.db)
+info1bis<- select(org.Hs.eg.db, keys=genes[1], 
+                  columns = c("SYMBOL","GO") ,
+                  keytype="ENTREZID")
+
+head(info1bis, n=20)
+```
+
+Information on the GOIDS obtained in the previous queries can be extracted from the GO.db package using the same approach.
+
+```{r}
+require(GO.db)
+info1MF <-info1[info1[,"ONTOLOGY"]=="MF",]
+goMFIDS1<-info1MF$GO 
+
+keytypes(GO.db)
+columns(GO.db)
+
+godefinitions <- select(GO.db, 
+                        keys =goMFIDS1, 
+                        columns=c("TERM"), 
+                        keytypes="GOID")
+godefinitions
+```
+
+Another way to look into the GOTerms associated with one or more genes is to plot their induced graph. In principle it is made bay the specific GOTerms and their ancestors up to the main node.
+
+Free nodes in the graph should be the same obtained in the previous chunk.
+```{r}
+require(GOstats)
+graphMF1<-GOstats::makeGOGraph(info1[1,"ENTREZID"],"MF", chip="hgu133a.db")
+plot(graphMF1, main=paste(info1[1,"SYMBOL"], info1[1,"ENTREZID"], "MF Ontology"), cex=3)
+```
+
+## Gene Enrichment Analysis
+  
+A gene enrichment analysis is applied on a "truncated" list of genes that one considers to be differentially expressed. In this case we take the list of what we called differentially expressed genes, but with a less restrictive p-value.
+
+```{r}
+selected <- topTabAvsB[,"adj.P.Val"]<0.05 & abs(topTabAvsB[,"logFC"]) > 1
+sum(selected)
+selectedProbes <- rownames(topTabAvsB[selected,])
+selectedEntrezs <-  select(hgu133a.db, selectedProbes, "ENTREZID")[,"ENTREZID"]
+```
+
+These are checked for enrichment versus a "Universe" gene list, usually, all the genes that have entered in the analysis
+
+```{r}
+allProbes <- rownames(expresAvsB)
+entrezUniverse = select(hgu133a.db, allProbes, "ENTREZID",  keytype="PROBEID")[,"ENTREZID"]
+```
+
+The analysis is performed by creating hyperparameters that are used to invoke the analysis functions
+
+```{r}
+# GOAnalysis
+require(GOstats)
+geneIds <- unique(selectedEntrezs)
+entrezUniverse <- unique(entrezUniverse)
+
+## Creamos los "hiperparametros" en que se basa el analisis
+GOparams = new("GOHyperGParams",
+               geneIds=geneIds, universeGeneIds=entrezUniverse,
+               annotation="hgu133a.db", ontology="BP",
+               pvalueCutoff=0.001, conditional=FALSE,
+               testDirection="over")
+
+## Ejecutamos los analisis
+  
+GOhyper = hyperGTest(GOparams)
+print(head(summary(GOhyper)))
+```
+
+It is possible to create a simple html report with the result.
+```{r}
+GOfilename =file.path(paste("GOResults.",".html", sep=""))
+htmlReport(GOhyper, file = GOfilename, summary.args=list("htmlLinks"=TRUE))
+```
+
